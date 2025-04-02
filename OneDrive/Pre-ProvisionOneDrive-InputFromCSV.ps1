@@ -1,7 +1,5 @@
 #Modified script from the original MS script: https://learn.microsoft.com/en-us/sharepoint/pre-provision-accounts
 
-#Connect to MSOL
-Connect-MsolService 
 #Connect to SPO - remember to change the URL:
 Connect-SPOService -Url https://contoso-admin.sharepoint.com
 
