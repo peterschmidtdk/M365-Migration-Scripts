@@ -10,4 +10,5 @@ Includes scripts for
 - ShareGate support
 
 Some scripts are intended to support workflows using ShareGate (a migration tool for SharePoint, Teams, and OneDrive).
-Learn more: https://www.sharegate.com
+Learn more: 
+- https://www.sharegate.com
