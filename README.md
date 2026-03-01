@@ -1,11 +1,16 @@
-# Migration Scripts
-Here is my collection of PowerShell scripts which can be helpful and useful during data migrations, especially tenant-to-tenant migrations.
+Migration Scripts (Tenant-to-Tenant Toolkit)
 
-It will be script for use with:
-- Exchange Online
-- SharePoint Online
-- OneDrive for Business
+A collection of PowerShell scripts and utilities for Exchange Online, SharePoint Online, and OneDrive for Business migrations—especially tenant-to-tenant (T2T) projects.
 
-Some script are for use with ShareGate, which is one of the SharePoint/Teams/OneDrive migration tools available.
-Read more on [www.sharegate.com
-](https://sharegate.com/microsoft-migration)
+Includes scripts for
+
+Exchange Online
+
+SharePoint Online
+
+OneDrive for Business
+
+ShareGate support
+
+Some scripts are intended to support workflows using ShareGate (a migration tool for SharePoint, Teams, and OneDrive).
+Learn more: https://www.sharegate.com
