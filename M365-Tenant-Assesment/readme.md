@@ -21,10 +21,9 @@ Results are exported to **CSV / Excel-friendly format** for further analysis.
 
 # Credit
 
-This script is based on the original work by **Sean McAvinue**.
+This script is a modified version og the original work by **Sean McAvinue**, who has done an amazing job with the initial script.
 
 Original resources:
-
 - GitHub: https://github.com/smcavinue  
 - Blog: https://seanmcavinue.net  
 - Article: https://practical365.com/office-365-migration-plan-assessment/  
