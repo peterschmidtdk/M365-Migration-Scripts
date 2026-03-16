@@ -1,38 +1,30 @@
-<##Author: Sean McAvinue
-##Details: Graph / PowerShell Script to assess a Microsoft 365 tenant for migration of Exchange, Teams, SharePoint and OneDrive, 
-##          Please fully read and test any scripts before running in your production environment!
+<#
+        .AUTHOR
+        Original Author: Sean McAvinue
+
+        .MODIFIED BY
+        Peter Schmidt
+
+        .VERSION
+        2.9
+
+        .LAST UPDATED
+        2026-03-16
+
+       Please fully read and test any scripts before running in your production environment!
+
         .SYNOPSIS
-        Reports on multiple factors of a Microsoft 365 tenant to help with migration preparation. Exports results to Excel
+        Reports on multiple factors of a Microsoft 365 tenant to assist with migration preparation.
+        Exports results to Excel/CSV.
 
         .DESCRIPTION
-        Gathers information using Microsoft Graph API and Exchange Online Management Shell and Exports to CSV
+        Gathers information using Microsoft Graph API and Exchange Online Management Shell
+        and exports the collected data to CSV/Excel to support migration planning.
 
-        .PARAMETER ClientID
-        Required - Application (Client) ID of the App Registration
+        Based on the original script by Sean McAvinue:
+        https://github.com/smcavinue
 
-        .PARAMETER TenantID
-        Required - Directory (Tenant) ID of the Azure AD Tenant
-
-        .PARAMETER certificateThumbprint
-        Required - Thumbprint of the certificate generated from the prepare-tenantassessment.ps1 script
-        
-        .PARAMETER IncludeGroupMembership
-        Optional - Switch to include group membership in the report
-
-        .PARAMETER IncludeMailboxPermissions
-        Optional - Switch to include mailbox permissions in the report
-
-        .PARAMETER IncludeDocumentLibraries
-        Optional - Switch to include document libraries in the report
-
-        .PARAMETER IncludeLists
-        Optional - Switch to include lists in the report
-
-        .PARAMETER IncludePlans
-        Optional - Switch to include Planner plans in the report
-
-        .EXAMPLE
-        Perform-TenantAssessment.ps1 -ClientId "12345678-1234-1234-1234-123456789012" -TenantId "12345678-1234-1234-1234-123456789012" -certificateThumbprint "1234567890123456789012345678901234567890" -IncludeGroupMembership -IncludeMailboxPermissions -IncludeDocumentLibraries -IncludeLists -IncludePlans
+        This version contains minor improvements and adjustments.
 
         .Notes
         For similar scripts check out the links below
@@ -46,8 +38,23 @@
         https://practical365.com/office-365-migration-plan-assessment/
         https://practical365.com/microsoft-365-tenant-to-tenant-migration-assessment-version-2/
 
+        .MODIFICATIONS
         .VERSION
-        2.8 - 2025-12-05
+        2.9 - 2026-03-12
+        - Fixed mailbox size/item count missing for Shared, Room, and Equipment mailboxes:
+          replaced fragile TotalItemSize string parsing (.Split etc.) with direct
+          ByteQuantifiedSize.Value / 1GB arithmetic, which is both correct and null-safe.
+        - Fixed archive mailbox size parsing the same way.
+        - Fixed $ProgressTracker++ for IncludePlans being outside the if-block, causing
+          an off-by-one in progress reporting when Plans was not selected.
+        - Performance: replaced O(users × groups/SKUs/plans) nested licence-translation
+          loops with hashtable lookups (significant speedup on large tenants).
+        - Performance: cached Get-MgSite -All into $FilteredSites, shared between the
+          IncludeDocumentLibraries and IncludeLists blocks — was called twice before.
+        - Performance: replaced array += with Generic List in GroupMembership,
+          MailboxPermissions, DocumentLibraries, Lists, and Planner loops.
+        - Simplified: removed unnecessary $RulesOutput copy-loop; assign directly.
+        - Simplified: removed inner foreach for MX records; use += on Resolve-DnsName.
         - If SharePoint usage report cannot be retrieved (e.g., 401 due to missing
           Reports.Read.All) or returns no rows, fall back to Get-MgSite -All and
           build a basic SharePoint Sites dataset so the "SharePoint Sites" tab is
@@ -86,6 +93,34 @@
           to avoid MSAL ClientCertificateCredential / WithLogging() issues.
         - Added Az.Accounts module check and imports.
         - Fixed minor bug in CAHeadings array (missing comma between includeLocations/excludeLocations).
+
+        .PARAMETER ClientID
+        Required - Application (Client) ID of the App Registration
+
+        .PARAMETER TenantID
+        Required - Directory (Tenant) ID of the Azure AD Tenant
+
+        .PARAMETER certificateThumbprint
+        Required - Thumbprint of the certificate generated from the prepare-tenantassessment.ps1 script
+        
+        .PARAMETER IncludeGroupMembership
+        Optional - Switch to include group membership in the report
+
+        .PARAMETER IncludeMailboxPermissions
+        Optional - Switch to include mailbox permissions in the report
+
+        .PARAMETER IncludeDocumentLibraries
+        Optional - Switch to include document libraries in the report
+
+        .PARAMETER IncludeLists
+        Optional - Switch to include lists in the report
+
+        .PARAMETER IncludePlans
+        Optional - Switch to include Planner plans in the report
+
+        .EXAMPLE
+        Perform-TenantAssessment.ps1 -ClientId "12345678-1234-1234-1234-123456789012" -TenantId "12345678-1234-1234-1234-123456789012" -certificateThumbprint "1234567890123456789012345678901234567890" -IncludeGroupMembership -IncludeMailboxPermissions -IncludeDocumentLibraries -IncludeLists -IncludePlans
+
     #>
 
 Param(
@@ -348,19 +383,41 @@ foreach ($user in $users) {
     $user | Add-Member -MemberType NoteProperty -Name "Disabled Plan IDs"         -Value ($user.licenseAssignmentStates.disabledplans   -join ";") -Force
 }
 
-##Translate License SKUs and groups
+##Translate License SKUs and groups — build lookup hashtables first for performance
+$GroupIdToName   = @{}
+foreach ($g in $Groups) { $GroupIdToName[$g.id] = $g.displayName }
+
+$SkuIdToPartNum  = @{}
+foreach ($s in $SKUs)   { $SkuIdToPartNum[$s.skuid] = $s.skuPartNumber }
+
+$PlanIdToName    = @{}
+foreach ($plan in ($SKUs.servicePlans)) {
+    if (-not $PlanIdToName.ContainsKey($plan.servicePlanId)) {
+        $PlanIdToName[$plan.servicePlanId] = $plan.servicePlanName
+    }
+}
+
 foreach ($user in $users) {
+    # Replace group IDs
+    $gla = $user.'Group License Assignments'
+    foreach ($kv in $GroupIdToName.GetEnumerator()) {
+        $gla = $gla.Replace($kv.Key, $kv.Value)
+    }
+    $user.'Group License Assignments' = $gla
 
-    foreach ($Group in $Groups) {
-        $user.'Group License Assignments' = $user.'Group License Assignments'.Replace($group.id, $group.displayName) 
+    # Replace SKU IDs
+    $lsku = $user.'License SKUs'
+    foreach ($kv in $SkuIdToPartNum.GetEnumerator()) {
+        $lsku = $lsku.Replace($kv.Key, $kv.Value)
     }
-    foreach ($SKU in $SKUs) {
-        $user.'License SKUs' = $user.'License SKUs'.Replace($SKU.skuid, $SKU.skuPartNumber)
-    }
-    foreach ($SKUplan in $SKUs.servicePlans) {
-        $user.'Disabled Plan IDs' = $user.'Disabled Plan IDs'.Replace($SKUplan.servicePlanId, $SKUplan.servicePlanName)
-    }
+    $user.'License SKUs' = $lsku
 
+    # Replace plan IDs
+    $dpid = $user.'Disabled Plan IDs'
+    foreach ($kv in $PlanIdToName.GetEnumerator()) {
+        $dpid = $dpid.Replace($kv.Key, $kv.Value)
+    }
+    $user.'Disabled Plan IDs' = $dpid
 }
 
 $ProgressStatus = "Getting Conditional Access policies..."
@@ -572,7 +629,7 @@ catch {
 if ($IncludeGroupMembership) {
     $ProgressStatus = "Enumerating Group Membership - This may take some time..."
     UpdateProgress
-    $GroupMembersObject = @()
+    $GroupMembersObject = [System.Collections.Generic.List[PSCustomObject]]::new()
     $i = 1
     foreach ($group in $groups) {
         $ProgressStatus = "Enumerating Group Membership - This may take some time... Processing Group $i of $($Groups.count)"
@@ -591,7 +648,7 @@ if ($IncludeGroupMembership) {
                 MemberObjectType        = $member.AdditionalProperties["@odata.type"].Replace('#microsoft.graph.', '')
             }
 
-            $GroupMembersObject += $memberEntry
+            $GroupMembersObject.Add($MemberEntry)
         }
 
         $Owners = Get-MgGroupOwner -GroupId $group.id -All
@@ -607,23 +664,33 @@ if ($IncludeGroupMembership) {
                 MemberObjectType        = $member.AdditionalProperties["@odata.type"].Replace('#microsoft.graph.', '')
             }
 
-            $GroupMembersObject += $MemberEntry
+            $GroupMembersObject.Add($MemberEntry)
         }
     }
 
     $ProgressTracker++
 }
 
+if ($IncludeDocumentLibraries -or $IncludeLists) {
+    $ProgressStatus = "Getting SharePoint sites for library/list enumeration..."
+    UpdateProgress
+    $FilteredSites = Get-MgSite -All | Where-Object {
+        $_.weburl -notlike "*sites/appcatalog*"    -and
+        $_.weburl -notlike "*sites/recordscenter*" -and
+        $_.weburl -notlike "*sites/search*"        -and
+        $_.weburl -notlike "*sites/CompliancePolicyCenter"
+    }
+}
+
 if ($IncludeDocumentLibraries) {
     $ProgressStatus = "Enumerating Document Libraries - This may take some time..."
     UpdateProgress
-    $Sites         = Get-MgSite -All | Where-Object { $_.weburl -notlike "*sites/appcatalog*" -and $_.weburl -notlike "*sites/recordscenter*" -and $_.weburl -notlike "*sites/search*" -and $_.weburl -notlike "*sites/CompliancePolicyCenter" }
-    $LibraryOutput = @()
-    foreach ($site in $sites) {
+    $LibraryOutput = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($site in $FilteredSites) {
         ##NOTE: Change for Non-English Tenants
         [array]$Drives = Get-MgSiteDrive -SiteId $site.id | Where-Object { $_.Name -eq "Documents" }
         foreach ($drive in $drives) {
-            $LibraryObject = [PSCustomObject]@{
+            $LibraryOutput.Add([PSCustomObject]@{
                 LibraryID    = $Drive.id
                 LibraryName  = $Drive.Name
                 LibraryURL   = $Drive.WebUrl
@@ -631,8 +698,7 @@ if ($IncludeDocumentLibraries) {
                 SiteID       = $Site.id
                 SiteName     = $Site.DisplayName
                 SiteURL      = $Site.WebURL
-            }
-            $LibraryOutput += $LibraryObject
+            })
         }
     }
     $ProgressTracker++
@@ -641,20 +707,18 @@ if ($IncludeDocumentLibraries) {
 if ($IncludeLists) {
     $ProgressStatus = "Enumerating Lists - This may take some time..."
     UpdateProgress
-    $Sites      = Get-MgSite -All | Where-Object { $_.weburl -notlike "*sites/appcatalog*" -and $_.weburl -notlike "*sites/recordscenter*" -and $_.weburl -notlike "*sites/search*" -and $_.weburl -notlike "*sites/CompliancePolicyCenter" }
-    $ListOutput = @()
-    foreach ($site in $sites) {
+    $ListOutput = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($site in $FilteredSites) {
         [array]$Lists = Get-MgSiteList -SiteId $site.id | Where-Object { $_.List.template -ne "documentLibrary" }
         foreach ($list in $lists) {
-            $ListObject = [PSCustomObject]@{
+            $ListOutput.Add([PSCustomObject]@{
                 ListID   = $list.id
                 ListName = $List.DisplayName
                 ListURL  = $List.webUrl
                 SiteID   = $Site.id
                 SiteName = $Site.DisplayName
                 SiteURL  = $Site.WebURL
-            }
-            $ListOutput += $ListObject
+            })
         }
     }
     $ProgressTracker++
@@ -664,7 +728,7 @@ if ($IncludePlans) {
     $ProgressStatus = "Enumerating Planner Plans - This may take some time..."
     UpdateProgress
     $unifiedGroups = $Groups | Where-Object { $_.grouptypes -Contains "unified" }
-    $PlanOutput    = @()
+    $PlanOutput    = [System.Collections.Generic.List[PSCustomObject]]::new()
     $PlanNumber    = 1
     foreach ($unifiedgroup in $unifiedGroups) {
         $ProgressStatus = "Enumerating Planner Plans for Group $PlanNumber of $($unifiedgroups.count) -  $($unifiedgroup.displayname)..."
@@ -672,17 +736,16 @@ if ($IncludePlans) {
         $PlanNumber++
         [array]$Plans = Get-MgGroupPlannerPlan -GroupId $unifiedgroup.id
         foreach ($plan in $plans) {
-            $PlanObject = [PSCustomObject]@{
+            $PlanOutput.Add([PSCustomObject]@{
                 PlanID    = $plan.id
                 PlanName  = $plan.title
                 GroupID   = $unifiedgroup.id
                 GroupName = $unifiedgroup.displayName
-            }
-            $PlanOutput += $PlanObject
+            })
         }
     }
+    $ProgressTracker++
 }
-$ProgressTracker++
 
 ##Tidy up Proxyaddresses
 foreach ($user in $users) {
@@ -816,11 +879,7 @@ UpdateProgress
 $ProgressTracker++
 
 ##Collect transport rules
-[array]$Rules = Get-TransportRule -ResultSize unlimited | Select-Object name, state, mode, priority, description, comments
-$RulesOutput  = @()
-foreach ($Rule in $Rules) {
-    $RulesOutput += $Rule
-}
+[array]$RulesOutput = Get-TransportRule -ResultSize unlimited | Select-Object name, state, mode, priority, description, comments
 
 #######Optional Items - EXO#######
 
@@ -828,7 +887,7 @@ foreach ($Rule in $Rules) {
 if ($IncludeMailboxPermissions) {
     $ProgressStatus = "Fetching Mailbox Permissions - This may take some time..."
     UpdateProgress
-    $PermissionOutput   = @()
+    $PermissionOutput   = [System.Collections.Generic.List[PSCustomObject]]::new()
     $MailboxList        = Get-EXOMailbox -ResultSize unlimited
     $PermissionProgress = 1
     foreach ($mailbox in $MailboxList) {
@@ -847,10 +906,7 @@ if ($IncludeMailboxPermissions) {
                 GrantedTo                 = $Permission.user
             }
             
-            $PermissionOutput += $PermissionObject
-        }
-
-        [array]$RecipientPermissions = Get-EXORecipientPermission $mailbox.UserPrincipalName | Where-Object { $_.Trustee -ne "NT AUTHORITY\SELF" }
+            $PermissionOutput.Add($PermissionObject) = Get-EXORecipientPermission $mailbox.UserPrincipalName | Where-Object { $_.Trustee -ne "NT AUTHORITY\SELF" }
 
         foreach ($permission in $RecipientPermissions) {
             $PermissionObject = [PSCustomObject]@{
@@ -862,10 +918,7 @@ if ($IncludeMailboxPermissions) {
                 GrantedTo                 = $Permission.trustee
             }
             
-            $PermissionOutput += $PermissionObject
-        }
-
-        $PermissionProgress++
+            $PermissionOutput.Add($PermissionObject)
     }
     $ProgressTracker++
 }
@@ -897,13 +950,10 @@ $ProgressTracker++
 $MXRecordsObject = @()
 foreach ($domain in $orgdetails.verifieddomains) {
     try {
-        [array]$MXRecords = Resolve-DnsName -Name $domain.name -Type mx -ErrorAction SilentlyContinue
+        $MXRecordsObject += Resolve-DnsName -Name $domain.name -Type mx -ErrorAction SilentlyContinue
     }
     catch {
         Write-Host "Error obtaining MX Record for $($domain.name)"
-    }
-    foreach ($MXRecord in $MXRecords) {
-        $MXRecordsObject += $MXRecord
     }
 }
 
@@ -927,38 +977,38 @@ foreach ($user in ($users | Where-Object { $_.usertype -ne "Guest" })) {
     elseif ($sharedmailboxes.ExternalDirectoryObjectId    -contains $user.id) { $user.Mailboxtype = "Shared" }
     else                                                                      { $user.Mailboxtype = "User" }
 
-    ##Set Mailbox Size and count (User mailbox stats)
+    ##Set Mailbox Size and count (User mailbox stats — sourced from Graph usage report)
     $thisMbx = $MailboxStats | Where-Object { $_.objectID -eq $user.id }
     if ($thisMbx) {
-        $user.MailboxSizeGB    = [math]::Round((($thisMbx.'Storage Used (Byte)' / 1024 / 1024 / 1024)), 2)
+        $user.MailboxSizeGB    = [math]::Round((([double]$thisMbx.'Storage Used (Byte)' / 1GB)), 2)
         $user.MailboxItemCount = $thisMbx.'item count'
     }
 
     ##Set Shared Mailbox size and count
     $thisShared = $SharedMailboxes | Where-Object { $_.ExternalDirectoryObjectId -eq $user.id }
-    if ($thisShared -and $thisShared.mailboxsize) {
-        $user.MailboxSizeGB    = [math]::Round((($thisShared.mailboxsize.value.ToString().Replace(',', '').Replace(' ', '').Split('b')[0].Split('(')[1] / 1024 / 1024 / 1024)), 2)
+    if ($thisShared -and $thisShared.MailboxSize -and $thisShared.MailboxSize.Value -gt 0) {
+        $user.MailboxSizeGB    = [math]::Round(($thisShared.MailboxSize.Value / 1GB), 2)
         $user.MailboxItemCount = $thisShared.ItemCount
     }
 
     ##Set Equipment Mailbox size and count
     $thisEquip = $EquipmentMailboxes | Where-Object { $_.ExternalDirectoryObjectId -eq $user.id }
-    if ($thisEquip -and $thisEquip.mailboxsize) {
-        $user.MailboxSizeGB    = [math]::Round((($thisEquip.mailboxsize.value.ToString().Replace(',', '').Replace(' ', '').Split('b')[0].Split('(')[1] / 1024 / 1024 / 1024)), 2)
+    if ($thisEquip -and $thisEquip.MailboxSize -and $thisEquip.MailboxSize.Value -gt 0) {
+        $user.MailboxSizeGB    = [math]::Round(($thisEquip.MailboxSize.Value / 1GB), 2)
         $user.MailboxItemCount = $thisEquip.ItemCount
     }
 
     ##Set Room Mailbox size and count
     $thisRoom = $roommailboxes | Where-Object { $_.ExternalDirectoryObjectId -eq $user.id }
-    if ($thisRoom -and $thisRoom.mailboxsize) {
-        $user.MailboxSizeGB    = [math]::Round((($thisRoom.mailboxsize.value.ToString().Replace(',', '').Replace(' ', '').Split('b')[0].Split('(')[1] / 1024 / 1024 / 1024)), 2)
+    if ($thisRoom -and $thisRoom.MailboxSize -and $thisRoom.MailboxSize.Value -gt 0) {
+        $user.MailboxSizeGB    = [math]::Round(($thisRoom.MailboxSize.Value / 1GB), 2)
         $user.MailboxItemCount = $thisRoom.ItemCount
     }
 
     ##Set archive size and count
     $thisArchive = $ArchiveStats | Where-Object { $_.objectID -eq $user.id }
-    if ($thisArchive) {
-        $user.ArchiveSizeGB    = [math]::Round((($thisArchive.totalitemsize.value.ToString().Replace(',', '').Replace(' ', '').Split('b')[0].Split('(')[1] / 1024 / 1024 / 1024)), 2)
+    if ($thisArchive -and $thisArchive.TotalItemSize -and $thisArchive.TotalItemSize.Value -gt 0) {
+        $user.ArchiveSizeGB    = [math]::Round(($thisArchive.TotalItemSize.Value / 1GB), 2)
         $user.ArchiveItemCount = $thisArchive.ItemCount
     }
 
