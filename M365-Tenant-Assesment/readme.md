@@ -12,6 +12,7 @@ It gathers configuration and workload data from:
 - Planner
 - Document Libraries
 - SharePoint Lists
+- Domains
 
 The output helps migration engineers understand the **current tenant footprint and dependencies before migration**.
 
