@@ -3,6 +3,7 @@
 Here you will find a collection of PowerShell scripts and utilities which can be helpful in tenant-to-tenant (T2T) migration projects.
 
 Here is a link til a great Assessment Tools: 
+- https://github.com/peterschmidtdk/M365-Migration-Scripts/tree/main/M365-Tenant-Assesment
 
 Includes scripts for
 - Exchange Online
