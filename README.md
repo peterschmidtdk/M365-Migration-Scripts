@@ -1,4 +1,4 @@
-###Migration Scripts (Tenant-to-Tenant Toolkit)
+#Migration Scripts (Tenant-to-Tenant Toolkit)
 
 Here you will find a collection of PowerShell scripts and utilities which can be helpful in tenant-to-tenant (T2T) migration projects.
 
