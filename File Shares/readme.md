@@ -1,6 +1,6 @@
 # Get-FolderDiskUsage
 
-A PowerShell script for tracking folder disk usage over time. Designed for monitoring shared drives or any folder structure where you want to keep an eye on growth trends.
+A PowerShell script for tracking folder disk usage over time. Designed for an overview or monitoring shared drives or any folder structure where you want to keep an eye on growth trends.
 
 ## Features
 
