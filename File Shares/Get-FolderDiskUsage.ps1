@@ -22,6 +22,10 @@
 
 .EXAMPLE
     .\Get-FolderDiskUsage.ps1 -RootPath "D:\Shares" -HistoryFile "C:\Tracking\shares_history.csv"
+
+.NOTES
+    Author  : Peter Schmidt
+    Version : 0.1.0
 #>
 
 [CmdletBinding()]
